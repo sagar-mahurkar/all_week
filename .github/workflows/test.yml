@@ -1,9 +1,16 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
-# Runs tests on multiple data versions using DVC
+# Runs tests on multiple DVC data versions
 # ==============================================================
 
 name: Test
+
+# --------------------------------------------------------------
+# Prevent GitHub from auto-canceling matrix jobs
+# --------------------------------------------------------------
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 # --------------------------------------------------------------
 # Trigger Conditions
@@ -36,6 +43,7 @@ permissions:
 jobs:
   test_model:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -70,14 +78,16 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP
+      # Step 5: Authenticate to GCP (stable)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
           GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
         run: |
+          set -e
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+          gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
       # Step 6: Setup DVC Remote (LOCAL config only)
@@ -138,12 +148,11 @@ jobs:
           cat test_output.txt
 
       # ----------------------------------------------------------
-      # Step 12: Create test report file (always)
+      # Step 12: Create test report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
           REPORT_FILE="test_report_${{ matrix.data_version }}.md"
-
           echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT_FILE
           echo "\`\`\`" >> $REPORT_FILE
           cat test_output.txt >> $REPORT_FILE
