@@ -83,15 +83,15 @@ jobs:
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
           dvc config --local core.analytics false
-
+          
       # ----------------------------------------------------------
-      # Checkout VERSIONED DATA ONLY (from tag)
+      # Checkout VERSIONED DVC pointers ONLY (from tag)
       # ----------------------------------------------------------
-      - name: Checkout data from tag
+      - name: Checkout DVC files from tag
         run: |
           echo "Using data version: ${{ matrix.data_version }}"
           git fetch --tags
-          git checkout ${{ matrix.data_version }} -- data.csv artifacts.dvc
+          git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
       # Pull DVC data
