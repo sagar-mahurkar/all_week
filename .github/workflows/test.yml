@@ -1,45 +1,30 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
-# Runs tests on multiple DVC data versions
+# Tests current code against versioned DVC data
 # ==============================================================
 
 name: Test
 
-# --------------------------------------------------------------
-# Trigger Conditions
-# --------------------------------------------------------------
 on:
-  workflow_dispatch:   # Manual run (runs BOTH v1.0 & v2.0)
-
+  workflow_dispatch:
   push:
-    branches:
-      - "**"
+    branches: ["**"]
     paths:
       - "**.py"
-      - "**.ipynb"
       - "requirements.txt"
       - ".github/workflows/test.yml"
-
   pull_request:
-    branches:
-      - "**"
+    branches: ["**"]
 
-# --------------------------------------------------------------
-# Permissions
-# --------------------------------------------------------------
 permissions:
   contents: read
   pull-requests: write
 
-# --------------------------------------------------------------
-# Job Definition
-# --------------------------------------------------------------
 jobs:
   test_model:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # ✅ Matrix-safe concurrency (prevents job cancellation)
     concurrency:
       group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
       cancel-in-progress: false
@@ -50,26 +35,26 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Checkout repository
+      # Checkout CURRENT BRANCH (code)
       # ----------------------------------------------------------
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
       # ----------------------------------------------------------
-      # Setup Python
+      # Python
       # ----------------------------------------------------------
       - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Setup CML
+      # CML
       # ----------------------------------------------------------
       - uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Install dependencies
+      # Dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
@@ -88,7 +73,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Setup DVC Remote (LOCAL config only)
+      # Setup DVC (local only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -100,55 +85,55 @@ jobs:
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Checkout Git tag and pull DVC data
+      # Checkout VERSIONED DATA ONLY (from tag)
       # ----------------------------------------------------------
-      - name: Checkout Git tag and pull DVC data
+      - name: Checkout data from tag
         run: |
-          echo "Checking out Git tag: ${{ matrix.data_version }}"
+          echo "Using data version: ${{ matrix.data_version }}"
           git fetch --tags
-          git checkout ${{ matrix.data_version }}
+          git checkout ${{ matrix.data_version }} -- data.csv artifacts.dvc
+
+      # ----------------------------------------------------------
+      # Pull DVC data
+      # ----------------------------------------------------------
+      - name: Pull DVC data
+        run: |
           dvc pull -v
           dvc checkout
 
       # ----------------------------------------------------------
       # Verify data
       # ----------------------------------------------------------
-      - name: Verify data.csv exists
+      - name: Verify data.csv
         run: |
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Train model
+      # Train model (current code)
       # ----------------------------------------------------------
       - name: Train model
         run: |
           python train.py
 
-      # ----------------------------------------------------------
-      # Verify model artifact
-      # ----------------------------------------------------------
       - name: Verify model artifact
         run: |
           test -f artifacts/model.joblib
 
       # ----------------------------------------------------------
-      # Run tests (do NOT stop on failure yet)
+      # Run tests (capture output)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
           pytest -vv > test_output.txt 2>&1 || true
 
-      # ----------------------------------------------------------
-      # Show test output and fail if tests failed
-      # ----------------------------------------------------------
-      - name: Show test output and fail if needed
+      - name: Show pytest output and fail if needed
         run: |
           echo "=== 🧪 Pytest Output (${{ matrix.data_version }}) ==="
           cat test_output.txt
           grep -q "FAILED" test_output.txt && exit 1 || true
 
       # ----------------------------------------------------------
-      # Create test report
+      # Create report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
@@ -158,18 +143,12 @@ jobs:
           cat test_output.txt >> $REPORT
           echo "\`\`\`" >> $REPORT
 
-      # ----------------------------------------------------------
-      # Upload report as artifact
-      # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: test-report-${{ matrix.data_version }}
           path: test_report_${{ matrix.data_version }}.md
 
-      # ----------------------------------------------------------
-      # Publish CML report (PR only)
-      # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
