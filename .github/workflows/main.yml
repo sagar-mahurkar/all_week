@@ -81,15 +81,15 @@ jobs:
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
 
       # ----------------------------------------------------------
-      # Step 6: Setup DVC Remote (GCS)
+      # Step 6: Setup DVC Remote (LOCAL config only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
           GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
         run: |
-          dvc remote modify gcs_remote url $GCP_BUCKET
-          dvc remote modify gcs_remote credentialpath /tmp/gcp_key.json
-          dvc remote default gcs_remote
+          dvc remote modify --local gcs_remote url $GCP_BUCKET
+          dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote default --local gcs_remote
 
       # ----------------------------------------------------------
       # Step 7: Checkout Git tag and pull DVC data
