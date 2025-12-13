@@ -4,6 +4,7 @@
 # - Run tests against multiple DVC data versions (v1.0, v2.0)
 # - Use latest code from branch
 # - Use versioned data via Git tags + DVC
+# - Publish CML report on EVERY workflow run
 # ==============================================================
 
 name: Test
@@ -73,7 +74,13 @@ jobs:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Install project dependencies
+      # Step 3: Setup CML (REQUIRED)
+      # ----------------------------------------------------------
+      - name: Setup CML
+        uses: iterative/setup-cml@v2
+
+      # ----------------------------------------------------------
+      # Step 4: Install project dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
@@ -81,7 +88,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 4: Authenticate to Google Cloud (for DVC remote)
+      # Step 5: Authenticate to Google Cloud (for DVC remote)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -92,7 +99,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 5: Configure DVC remote (LOCAL config only)
+      # Step 6: Configure DVC remote (LOCAL config only)
       # ----------------------------------------------------------
       - name: Configure DVC remote
         env:
@@ -104,8 +111,7 @@ jobs:
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 6: Checkout VERSIONED DVC pointers from Git tag
-      # (Code stays on branch; only data pointers change)
+      # Step 7: Checkout VERSIONED DVC pointers from Git tag
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
@@ -113,7 +119,7 @@ jobs:
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Step 7: Pull actual data from DVC remote
+      # Step 8: Pull actual data from DVC remote
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
@@ -121,21 +127,21 @@ jobs:
           dvc checkout
 
       # ----------------------------------------------------------
-      # Step 8: Train model using CURRENT code
+      # Step 9: Train model using CURRENT code
       # ----------------------------------------------------------
       - name: Train model
         run: |
           python train.py
 
       # ----------------------------------------------------------
-      # Step 9: Run tests (capture output without failing early)
+      # Step 10: Run tests (capture output without failing early)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
           pytest -vv > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Step 10: Display test output and fail if tests failed
+      # Step 11: Display test output and fail if tests failed
       # ----------------------------------------------------------
       - name: Fail if tests failed
         run: |
@@ -143,7 +149,7 @@ jobs:
           grep -q "FAILED" test_output.txt && exit 1 || true
 
       # ----------------------------------------------------------
-      # Step 11: Create per-version test report
+      # Step 12: Create per-version test report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
@@ -154,7 +160,7 @@ jobs:
           echo '```' >> $REPORT
 
       # ----------------------------------------------------------
-      # Step 12: Upload report as workflow artifact
+      # Step 13: Upload report as workflow artifact
       # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
@@ -163,11 +169,16 @@ jobs:
           path: test_report_${{ matrix.data_version }}.md
 
       # ----------------------------------------------------------
-      # Step 13: Publish CML report (Pull Requests only)
+      # Step 14: Publish CML report (ALL workflow runs)
       # ----------------------------------------------------------
       - name: Publish CML report
-        if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx @dvcorg/cml comment create test_report_${{ matrix.data_version }}.md
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Publishing CML report to Pull Request"
+            cml comment create test_report_${{ matrix.data_version }}.md
+          else
+            echo "Publishing CML report to Workflow Summary"
+            cml send-comment test_report_${{ matrix.data_version }}.md
+          fi
