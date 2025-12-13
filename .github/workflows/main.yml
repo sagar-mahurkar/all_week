@@ -1,0 +1,148 @@
+# ==============================================================
+# GitHub Actions Workflow: Main
+# Runs on push/PR merge to main + manual trigger
+# Trains model, runs tests, and reports results via CML
+# ==============================================================
+
+name: Main
+
+# --------------------------------------------------------------
+# Trigger conditions
+# --------------------------------------------------------------
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - '**.ipynb'
+      - 'requirements.txt'
+
+  pull_request:
+    branches:
+      - main
+
+# --------------------------------------------------------------
+# Permissions (minimum required)
+# --------------------------------------------------------------
+permissions:
+  contents: read
+  pull-requests: write
+
+# --------------------------------------------------------------
+# Job Definition
+# --------------------------------------------------------------
+jobs:
+  test_model:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        data_version: [v1.0, v2.0]
+
+    steps:
+      # ----------------------------------------------------------
+      # Step 1: Checkout repository (full history for DVC)
+      # ----------------------------------------------------------
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # ----------------------------------------------------------
+      # Step 2: Setup Python
+      # ----------------------------------------------------------
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # ----------------------------------------------------------
+      # Step 3: Setup CML
+      # ----------------------------------------------------------
+      - uses: iterative/setup-cml@v2
+
+      # ----------------------------------------------------------
+      # Step 4: Install dependencies
+      # ----------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ----------------------------------------------------------
+      # Step 5: Authenticate to GCP
+      # ----------------------------------------------------------
+      - name: Authenticate to GCP
+        env:
+          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        run: |
+          echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+
+      # ----------------------------------------------------------
+      # Step 6: Setup DVC Remote (GCS)
+      # ----------------------------------------------------------
+      - name: Setup DVC Remote
+        env:
+          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
+        run: |
+          dvc remote modify gcs_remote url $GCP_BUCKET
+          dvc remote modify gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote default gcs_remote
+
+      # ----------------------------------------------------------
+      # Step 7: Pull correct DVC data version
+      # ----------------------------------------------------------
+      - name: Pull DVC Data
+        run: |
+          echo "Using data version: ${{ matrix.data_version }}"
+          dvc checkout ${{ matrix.data_version }} || true
+          dvc pull -v
+
+      # ----------------------------------------------------------
+      # Step 8: Verify data exists
+      # ----------------------------------------------------------
+      - name: Verify data.csv exists
+        run: |
+          if [ ! -f data.csv ]; then
+            echo "data.csv not found!"
+            ls -R .
+            exit 1
+          fi
+          echo "data.csv found"
+
+      # ----------------------------------------------------------
+      # Step 9: Train the model
+      # ----------------------------------------------------------
+      - name: Train the model
+        run: |
+          python train.py > main_output.txt 2>&1
+
+      # ----------------------------------------------------------
+      # Step 10: Run model tests
+      # ----------------------------------------------------------
+      - name: Run model tests
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+
+      # ----------------------------------------------------------
+      # Step 11: Show training logs
+      # ----------------------------------------------------------
+      - name: Debug — show training output
+        run: |
+          echo "=== Training Log ==="
+          cat main_output.txt
+
+      # ----------------------------------------------------------
+      # Step 12: Create and publish CML report
+      # ----------------------------------------------------------
+      - name: Create CML report
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "## Results for ${{ matrix.data_version }}" > report.md
+          echo "\`\`\`" >> report.md
+          cat main_output.txt >> report.md
+          echo "\`\`\`" >> report.md
+          cml comment create --publish report.md
