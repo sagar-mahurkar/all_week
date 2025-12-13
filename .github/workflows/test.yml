@@ -6,17 +6,10 @@
 name: Test
 
 # --------------------------------------------------------------
-# Prevent GitHub from auto-canceling matrix jobs
-# --------------------------------------------------------------
-concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
-  cancel-in-progress: false
-
-# --------------------------------------------------------------
 # Trigger Conditions
 # --------------------------------------------------------------
 on:
-  workflow_dispatch:   # ✅ Manual run (runs BOTH v1.0 & v2.0)
+  workflow_dispatch:   # Manual run (runs BOTH v1.0 & v2.0)
 
   push:
     branches:
@@ -32,7 +25,7 @@ on:
       - "**"
 
 # --------------------------------------------------------------
-# Permissions (minimum required)
+# Permissions
 # --------------------------------------------------------------
 permissions:
   contents: read
@@ -46,32 +39,37 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # ✅ Matrix-specific concurrency (CORRECT)
+    concurrency:
+      group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
+      cancel-in-progress: false
+
     strategy:
       matrix:
         data_version: [v1.0, v2.0]
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout repository (full history for tags/DVC)
+      # Checkout
       # ----------------------------------------------------------
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
       # ----------------------------------------------------------
-      # Step 2: Setup Python
+      # Python
       # ----------------------------------------------------------
       - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Setup CML
+      # CML
       # ----------------------------------------------------------
       - uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Step 4: Install dependencies
+      # Dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
@@ -79,19 +77,18 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP
+      # GCP Auth
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
           GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
         run: |
-          set -e
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 6: Setup DVC Remote (LOCAL config only)
+      # DVC Remote (local only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -101,94 +98,63 @@ jobs:
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
 
-      # ----------------------------------------------------------
-      # Step 7: Disable DVC analytics (CI best practice)
-      # ----------------------------------------------------------
       - name: Disable DVC analytics
         run: |
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 8: Checkout Git tag and pull DVC data
+      # Git tag + DVC
       # ----------------------------------------------------------
       - name: Checkout Git tag and pull DVC data
         run: |
           echo "Checking out Git tag: ${{ matrix.data_version }}"
           git fetch --tags
           git checkout ${{ matrix.data_version }}
-
-          echo "Pulling DVC data"
           dvc pull -v
           dvc checkout
 
       # ----------------------------------------------------------
-      # Step 9: Verify data file
+      # Verify data
       # ----------------------------------------------------------
       - name: Verify data.csv exists
         run: |
-          if [ ! -f data.csv ]; then
-            echo "❌ data.csv not found!"
-            ls -R .
-            exit 1
-          fi
-          echo "✅ data.csv found"
-
+          test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 10: Train model (required for model tests)
+      # Train
       # ----------------------------------------------------------
       - name: Train model
         run: |
           python train.py
 
-      # ----------------------------------------------------------
-      # Verify model artifact exists
-      # ----------------------------------------------------------
       - name: Verify model artifact
         run: |
-          echo "Checking model artifact..."
-          ls -R artifacts || true
           test -f artifacts/model.joblib
 
       # ----------------------------------------------------------
-      # Step 11: Run tests (FAIL on error)
+      # Tests (WRITE OUTPUT)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
-          pytest -vv
-          # pytest > test_output.txt 2>&1
+          pytest -vv > test_output.txt 2>&1
 
       # ----------------------------------------------------------
-      # Step 12: Show test output
-      # ----------------------------------------------------------
-      - name: Debug — show test output
-        run: |
-          echo "=== 🧪 Test Log (${{ matrix.data_version }}) ==="
-          cat test_output.txt
-
-      # ----------------------------------------------------------
-      # Step 13: Create test report
+      # Report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
-          REPORT_FILE="test_report_${{ matrix.data_version }}.md"
-          echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT_FILE
-          echo "\`\`\`" >> $REPORT_FILE
-          cat test_output.txt >> $REPORT_FILE
-          echo "\`\`\`" >> $REPORT_FILE
+          REPORT="test_report_${{ matrix.data_version }}.md"
+          echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT
+          echo "\`\`\`" >> $REPORT
+          cat test_output.txt >> $REPORT
+          echo "\`\`\`" >> $REPORT
 
-      # ----------------------------------------------------------
-      # Step 14: Upload report as artifact (ALL runs)
-      # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: test-report-${{ matrix.data_version }}
           path: test_report_${{ matrix.data_version }}.md
 
-      # ----------------------------------------------------------
-      # Step 15: Publish CML report (PR only)
-      # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
