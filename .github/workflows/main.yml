@@ -1,17 +1,18 @@
 # ==============================================================
 # GitHub Actions Workflow: Main
 # Runs on push/PR merge to main + manual trigger
-# Trains model, runs tests, and reports results
+# Trains model and reports results via CML
 # ==============================================================
 
 name: Main
+
 # --------------------------------------------------------------
 # Prevent GitHub from auto-canceling matrix jobs
 # --------------------------------------------------------------
 concurrency:
   group: main-only-${{ github.ref }}
   cancel-in-progress: false
-  
+
 # --------------------------------------------------------------
 # Trigger conditions
 # --------------------------------------------------------------
@@ -41,7 +42,7 @@ permissions:
 # Job Definition
 # --------------------------------------------------------------
 jobs:
-  test_model:
+  train_model:
     runs-on: ubuntu-latest
 
     strategy:
@@ -50,23 +51,24 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout repository (full history for DVC)
+      # Step 1: Checkout CURRENT branch (PR HEAD / main)
       # ----------------------------------------------------------
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # ----------------------------------------------------------
       # Step 2: Setup Python
       # ----------------------------------------------------------
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Setup CML
+      # Step 3: Setup CML (REQUIRED for PR comments)
       # ----------------------------------------------------------
-      - uses: iterative/setup-cml@v2
+      - name: Setup CML
+        uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
       # Step 4: Install dependencies
@@ -85,6 +87,7 @@ jobs:
         run: |
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+          gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
       # Step 6: Setup DVC Remote (LOCAL config only)
@@ -96,42 +99,41 @@ jobs:
           dvc remote modify --local gcs_remote url $GCP_BUCKET
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
+          dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 7: Checkout Git tag and pull DVC data
+      # Step 7: Checkout ONLY DVC pointers from Git tag
       # ----------------------------------------------------------
-      - name: Checkout Git tag and pull DVC data
+      - name: Checkout DVC files for data version
         run: |
-          echo "Checking out Git tag: ${{ matrix.data_version }}"
+          echo "Using data version: ${{ matrix.data_version }}"
           git fetch --tags
-          git checkout ${{ matrix.data_version }}
-      
-          echo "Pulling DVC data for this Git version"
-          dvc pull -v
+          git checkout ${{ matrix.data_version }} -- '*.dvc'
+
+      # ----------------------------------------------------------
+      # Step 8: Pull DVC data
+      # ----------------------------------------------------------
+      - name: Pull DVC data
+        run: |
+          dvc pull
           dvc checkout
 
-
       # ----------------------------------------------------------
-      # Step 8: Verify data exists
+      # Step 9: Verify data exists
       # ----------------------------------------------------------
       - name: Verify data.csv exists
         run: |
-          if [ ! -f data.csv ]; then
-            echo "data.csv not found!"
-            ls -R .
-            exit 1
-          fi
-          echo "data.csv found"
+          test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 9: Train the model
+      # Step 10: Train the model
       # ----------------------------------------------------------
       - name: Train the model
         run: |
           python train.py > main_output.txt 2>&1
 
       # ----------------------------------------------------------
-      # Step 10: Show training logs
+      # Step 11: Show training logs
       # ----------------------------------------------------------
       - name: Debug — show training output
         run: |
@@ -139,19 +141,18 @@ jobs:
           cat main_output.txt
 
       # ----------------------------------------------------------
-      # Step 11: Create report file (always)
+      # Step 12: Create report file
       # ----------------------------------------------------------
       - name: Create report file
         run: |
-          REPORT_FILE="report_${{ matrix.data_version }}.md"
-
-          echo "## 📊 Results for ${{ matrix.data_version }}" > $REPORT_FILE
-          echo "\`\`\`" >> $REPORT_FILE
-          cat main_output.txt >> $REPORT_FILE
-          echo "\`\`\`" >> $REPORT_FILE
+          REPORT="report_${{ matrix.data_version }}.md"
+          echo "## 📊 Results for ${{ matrix.data_version }}" > $REPORT
+          echo '```' >> $REPORT
+          cat main_output.txt >> $REPORT
+          echo '```' >> $REPORT
 
       # ----------------------------------------------------------
-      # Step 12: Upload report as artifact (ALL runs)
+      # Step 13: Upload report as artifact (ALL runs)
       # ----------------------------------------------------------
       - name: Upload training report
         uses: actions/upload-artifact@v4
@@ -160,11 +161,11 @@ jobs:
           path: report_${{ matrix.data_version }}.md
 
       # ----------------------------------------------------------
-      # Step 13: Publish CML report (PR only)
+      # Step 14: Publish CML report (PR only)
       # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cml comment create --publish report_${{ matrix.data_version }}.md
+          cml comment create report_${{ matrix.data_version }}.md
