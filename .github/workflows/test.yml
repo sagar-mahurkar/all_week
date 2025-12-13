@@ -1,60 +1,79 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
-# Tests current code against versioned DVC data
+# Purpose:
+# - Run tests against multiple DVC data versions (v1.0, v2.0)
+# - Use latest code from branch
+# - Use versioned data via Git tags + DVC
 # ==============================================================
 
 name: Test
 
+# --------------------------------------------------------------
+# Trigger Conditions
+# --------------------------------------------------------------
 on:
+  # Manual trigger (runs BOTH v1.0 and v2.0)
   workflow_dispatch:
+
+  # Run on any push affecting code or dependencies
   push:
     branches: ["**"]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/test.yml"
-  pull_request:
-    branches: ["**"]
 
+  # Run on all pull requests
+  pull_request:
+
+# --------------------------------------------------------------
+# Permissions (minimum required)
+# --------------------------------------------------------------
 permissions:
   contents: read
   pull-requests: write
 
+# --------------------------------------------------------------
+# Job Definition
+# --------------------------------------------------------------
 jobs:
   test_model:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # ----------------------------------------------------------
+    # Prevent matrix jobs (v1.0 / v2.0) from canceling each other
+    # ----------------------------------------------------------
     concurrency:
       group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
       cancel-in-progress: false
 
+    # ----------------------------------------------------------
+    # Test against multiple data versions
+    # ----------------------------------------------------------
     strategy:
       matrix:
         data_version: [v1.0, v2.0]
 
     steps:
       # ----------------------------------------------------------
-      # Checkout CURRENT BRANCH (code)
+      # Step 1: Checkout CURRENT branch (code + tests)
       # ----------------------------------------------------------
-      - uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # ----------------------------------------------------------
-      # Python
+      # Step 2: Setup Python environment
       # ----------------------------------------------------------
-      - uses: actions/setup-python@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # CML
-      # ----------------------------------------------------------
-      - uses: iterative/setup-cml@v2
-
-      # ----------------------------------------------------------
-      # Dependencies
+      # Step 3: Install project dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
@@ -62,7 +81,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Authenticate to GCP
+      # Step 4: Authenticate to Google Cloud (for DVC remote)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -73,9 +92,9 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Setup DVC (local only)
+      # Step 5: Configure DVC remote (LOCAL config only)
       # ----------------------------------------------------------
-      - name: Setup DVC Remote
+      - name: Configure DVC remote
         env:
           GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
         run: |
@@ -83,75 +102,72 @@ jobs:
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
           dvc config --local core.analytics false
-          
+
       # ----------------------------------------------------------
-      # Checkout VERSIONED DVC pointers ONLY (from tag)
+      # Step 6: Checkout VERSIONED DVC pointers from Git tag
+      # (Code stays on branch; only data pointers change)
       # ----------------------------------------------------------
-      - name: Checkout DVC files from tag
+      - name: Checkout DVC pointers
         run: |
-          echo "Using data version: ${{ matrix.data_version }}"
           git fetch --tags
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Pull DVC data
+      # Step 7: Pull actual data from DVC remote
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
-          dvc pull -v
+          dvc pull
           dvc checkout
 
       # ----------------------------------------------------------
-      # Verify data
-      # ----------------------------------------------------------
-      - name: Verify data.csv
-        run: |
-          test -f data.csv
-
-      # ----------------------------------------------------------
-      # Train model (current code)
+      # Step 8: Train model using CURRENT code
       # ----------------------------------------------------------
       - name: Train model
         run: |
           python train.py
 
-      - name: Verify model artifact
-        run: |
-          test -f artifacts/model.joblib
-
       # ----------------------------------------------------------
-      # Run tests (capture output)
+      # Step 9: Run tests (capture output without failing early)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
           pytest -vv > test_output.txt 2>&1 || true
 
-      - name: Show pytest output and fail if needed
+      # ----------------------------------------------------------
+      # Step 10: Display test output and fail if tests failed
+      # ----------------------------------------------------------
+      - name: Fail if tests failed
         run: |
-          echo "=== 🧪 Pytest Output (${{ matrix.data_version }}) ==="
           cat test_output.txt
           grep -q "FAILED" test_output.txt && exit 1 || true
 
       # ----------------------------------------------------------
-      # Create report
+      # Step 11: Create per-version test report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
           REPORT="test_report_${{ matrix.data_version }}.md"
           echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT
-          echo "\`\`\`" >> $REPORT
+          echo '```' >> $REPORT
           cat test_output.txt >> $REPORT
-          echo "\`\`\`" >> $REPORT
+          echo '```' >> $REPORT
 
+      # ----------------------------------------------------------
+      # Step 12: Upload report as workflow artifact
+      # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: test-report-${{ matrix.data_version }}
           path: test_report_${{ matrix.data_version }}.md
 
+      # ----------------------------------------------------------
+      # Step 13: Publish CML report (Pull Requests only)
+      # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cml comment create --publish test_report_${{ matrix.data_version }}.md
+          npx @dvcorg/cml comment create test_report_${{ matrix.data_version }}.md
