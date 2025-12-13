@@ -1,0 +1,162 @@
+# ==============================================================
+# GitHub Actions Workflow: Test
+# Runs tests on multiple data versions using DVC
+# ==============================================================
+
+name: Test
+
+# --------------------------------------------------------------
+# Trigger Conditions
+# --------------------------------------------------------------
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - "**"
+    paths:
+      - "**.py"
+      - "**.ipynb"
+      - "requirements.txt"
+
+  pull_request:
+    branches:
+      - "**"
+
+# --------------------------------------------------------------
+# Permissions (minimum required)
+# --------------------------------------------------------------
+permissions:
+  contents: read
+  pull-requests: write
+
+# --------------------------------------------------------------
+# Job Definition
+# --------------------------------------------------------------
+jobs:
+  test_model:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        data_version: [v1.0, v2.0]
+
+    steps:
+      # ----------------------------------------------------------
+      # Step 1: Checkout repository (full history for tags/DVC)
+      # ----------------------------------------------------------
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      # ----------------------------------------------------------
+      # Step 2: Setup Python
+      # ----------------------------------------------------------
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # ----------------------------------------------------------
+      # Step 3: Setup CML
+      # ----------------------------------------------------------
+      - uses: iterative/setup-cml@v2
+
+      # ----------------------------------------------------------
+      # Step 4: Install dependencies
+      # ----------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ----------------------------------------------------------
+      # Step 5: Authenticate to GCP
+      # ----------------------------------------------------------
+      - name: Authenticate to GCP
+        env:
+          GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        run: |
+          echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+
+      # ----------------------------------------------------------
+      # Step 6: Setup DVC Remote (LOCAL config only)
+      # ----------------------------------------------------------
+      - name: Setup DVC Remote
+        env:
+          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
+        run: |
+          dvc remote modify --local gcs_remote url $GCP_BUCKET
+          dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote default --local gcs_remote
+
+      # ----------------------------------------------------------
+      # Step 7: Checkout Git tag and pull DVC data
+      # ----------------------------------------------------------
+      - name: Checkout Git tag and pull DVC data
+        run: |
+          echo "Checking out Git tag: ${{ matrix.data_version }}"
+          git fetch --tags
+          git checkout ${{ matrix.data_version }}
+
+          echo "Pulling DVC data"
+          dvc pull -v
+          dvc checkout
+
+      # ----------------------------------------------------------
+      # Step 8: Verify data file
+      # ----------------------------------------------------------
+      - name: Verify data.csv exists
+        run: |
+          if [ ! -f data.csv ]; then
+            echo "❌ data.csv not found!"
+            ls -R .
+            exit 1
+          fi
+          echo "✅ data.csv found"
+
+      # ----------------------------------------------------------
+      # Step 9: Run tests (FAIL on error)
+      # ----------------------------------------------------------
+      - name: Run tests
+        run: |
+          pytest > test_output.txt 2>&1
+
+      # ----------------------------------------------------------
+      # Step 10: Show test output
+      # ----------------------------------------------------------
+      - name: Debug — show test output
+        run: |
+          echo "=== 🧪 Test Log (${{ matrix.data_version }}) ==="
+          cat test_output.txt
+
+      # ----------------------------------------------------------
+      # Step 11: Create test report file (always)
+      # ----------------------------------------------------------
+      - name: Create test report
+        run: |
+          REPORT_FILE="test_report_${{ matrix.data_version }}.md"
+
+          echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT_FILE
+          echo "\`\`\`" >> $REPORT_FILE
+          cat test_output.txt >> $REPORT_FILE
+          echo "\`\`\`" >> $REPORT_FILE
+
+      # ----------------------------------------------------------
+      # Step 12: Upload report as artifact (ALL runs)
+      # ----------------------------------------------------------
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.data_version }}
+          path: test_report_${{ matrix.data_version }}.md
+
+      # ----------------------------------------------------------
+      # Step 13: Publish CML report (PR only)
+      # ----------------------------------------------------------
+      - name: Publish CML report
+        if: github.event_name == 'pull_request'
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cml comment create --publish test_report_${{ matrix.data_version }}.md
