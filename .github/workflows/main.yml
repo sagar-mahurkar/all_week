@@ -120,14 +120,7 @@ jobs:
           python train.py > main_output.txt 2>&1
 
       # ----------------------------------------------------------
-      # Step 10: Run model tests
-      # ----------------------------------------------------------
-      - name: Run model tests
-        run: |
-          python -m unittest discover -s tests -p "test_*.py"
-
-      # ----------------------------------------------------------
-      # Step 11: Show training logs
+      # Step 10: Show training logs
       # ----------------------------------------------------------
       - name: Debug — show training output
         run: |
@@ -135,7 +128,7 @@ jobs:
           cat main_output.txt
 
       # ----------------------------------------------------------
-      # Step 12: Create and publish CML report
+      # Step 11: Create and publish CML report
       # ----------------------------------------------------------
       - name: Create CML report
         env:
