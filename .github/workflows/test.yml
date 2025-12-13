@@ -16,7 +16,7 @@ concurrency:
 # Trigger Conditions
 # --------------------------------------------------------------
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # ✅ Manual run (runs BOTH v1.0 & v2.0)
 
   push:
     branches:
@@ -78,7 +78,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP (stable)
+      # Step 5: Authenticate to GCP
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
