@@ -141,6 +141,14 @@ jobs:
         run: |
           python train.py
 
+      # ----------------------------------------------------------
+      # Verify model artifact exists
+      # ----------------------------------------------------------
+      - name: Verify model artifact
+        run: |
+          echo "Checking model artifact..."
+          ls -R artifacts || true
+          test -f artifacts/model.joblib
 
       # ----------------------------------------------------------
       # Step 11: Run tests (FAIL on error)
