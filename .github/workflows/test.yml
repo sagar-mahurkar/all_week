@@ -9,7 +9,7 @@ name: Test
 # Prevent GitHub from auto-canceling matrix jobs
 # --------------------------------------------------------------
 concurrency:
-  group: test-${{ github.workflow }}-${{ github.ref }}
+  group: test-only-${{ github.ref }}
   cancel-in-progress: false
 
 # --------------------------------------------------------------
