@@ -167,11 +167,11 @@ jobs:
         with:
           name: test-report-${{ matrix.data_version }}
           path: test_report_${{ matrix.data_version }}.md
-
+          
       # ----------------------------------------------------------
-      # Step 14: Publish CML report (ALL workflow runs)
+      # Step 14: Publish results
       # ----------------------------------------------------------
-      - name: Publish CML report
+      - name: Publish results
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -179,6 +179,6 @@ jobs:
             echo "Publishing CML report to Pull Request"
             cml comment create test_report_${{ matrix.data_version }}.md
           else
-            echo "Publishing CML report to Workflow Summary"
-            cml send-comment test_report_${{ matrix.data_version }}.md
+            echo "Publishing report to GitHub Actions Summary"
+            cat test_report_${{ matrix.data_version }}.md >> $GITHUB_STEP_SUMMARY
           fi
