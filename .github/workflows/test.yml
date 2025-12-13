@@ -91,7 +91,14 @@ jobs:
           dvc remote default --local gcs_remote
 
       # ----------------------------------------------------------
-      # Step 7: Checkout Git tag and pull DVC data
+      # Step 7: Disable DVC analytics (CI best practice)
+      # ----------------------------------------------------------
+      - name: Disable DVC analytics
+        run: |
+          dvc config --local core.analytics false
+
+      # ----------------------------------------------------------
+      # Step 8: Checkout Git tag and pull DVC data
       # ----------------------------------------------------------
       - name: Checkout Git tag and pull DVC data
         run: |
@@ -104,7 +111,7 @@ jobs:
           dvc checkout
 
       # ----------------------------------------------------------
-      # Step 8: Verify data file
+      # Step 9: Verify data file
       # ----------------------------------------------------------
       - name: Verify data.csv exists
         run: |
@@ -116,14 +123,14 @@ jobs:
           echo "✅ data.csv found"
 
       # ----------------------------------------------------------
-      # Step 9: Run tests (FAIL on error)
+      # Step 10: Run tests (FAIL on error)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
           pytest > test_output.txt 2>&1
 
       # ----------------------------------------------------------
-      # Step 10: Show test output
+      # Step 11: Show test output
       # ----------------------------------------------------------
       - name: Debug — show test output
         run: |
@@ -131,7 +138,7 @@ jobs:
           cat test_output.txt
 
       # ----------------------------------------------------------
-      # Step 11: Create test report file (always)
+      # Step 12: Create test report file (always)
       # ----------------------------------------------------------
       - name: Create test report
         run: |
@@ -143,7 +150,7 @@ jobs:
           echo "\`\`\`" >> $REPORT_FILE
 
       # ----------------------------------------------------------
-      # Step 12: Upload report as artifact (ALL runs)
+      # Step 13: Upload report as artifact (ALL runs)
       # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
@@ -152,7 +159,7 @@ jobs:
           path: test_report_${{ matrix.data_version }}.md
 
       # ----------------------------------------------------------
-      # Step 13: Publish CML report (PR only)
+      # Step 14: Publish CML report (PR only)
       # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
