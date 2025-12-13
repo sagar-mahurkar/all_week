@@ -1,7 +1,7 @@
 # ==============================================================
 # GitHub Actions Workflow: Main
 # Runs on push/PR merge to main + manual trigger
-# Trains model, runs tests, and reports results via CML
+# Trains model, runs tests, and reports results
 # ==============================================================
 
 name: Main
@@ -124,19 +124,36 @@ jobs:
       # ----------------------------------------------------------
       - name: Debug — show training output
         run: |
-          echo "=== Training Log ==="
+          echo "=== Training Log (${{ matrix.data_version }}) ==="
           cat main_output.txt
 
       # ----------------------------------------------------------
-      # Step 11: Create and publish CML report (PR only)
+      # Step 11: Create report file (always)
       # ----------------------------------------------------------
-      - name: Create CML report
+      - name: Create report file
+        run: |
+          REPORT_FILE="report_${{ matrix.data_version }}.md"
+
+          echo "## 📊 Results for ${{ matrix.data_version }}" > $REPORT_FILE
+          echo "\`\`\`" >> $REPORT_FILE
+          cat main_output.txt >> $REPORT_FILE
+          echo "\`\`\`" >> $REPORT_FILE
+
+      # ----------------------------------------------------------
+      # Step 12: Upload report as artifact (ALL runs)
+      # ----------------------------------------------------------
+      - name: Upload training report
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-${{ matrix.data_version }}
+          path: report_${{ matrix.data_version }}.md
+
+      # ----------------------------------------------------------
+      # Step 13: Publish CML report (PR only)
+      # ----------------------------------------------------------
+      - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## 📊 Results for ${{ matrix.data_version }}" > report.md
-          echo "\`\`\`" >> report.md
-          cat main_output.txt >> report.md
-          echo "\`\`\`" >> report.md
-          cml comment create --publish report.md
+          cml comment create --publish report_${{ matrix.data_version }}.md
