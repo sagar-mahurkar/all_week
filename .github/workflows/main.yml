@@ -128,13 +128,14 @@ jobs:
           cat main_output.txt
 
       # ----------------------------------------------------------
-      # Step 11: Create and publish CML report
+      # Step 11: Create and publish CML report (PR only)
       # ----------------------------------------------------------
       - name: Create CML report
+        if: github.event_name == 'pull_request'
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## Results for ${{ matrix.data_version }}" > report.md
+          echo "## 📊 Results for ${{ matrix.data_version }}" > report.md
           echo "\`\`\`" >> report.md
           cat main_output.txt >> report.md
           echo "\`\`\`" >> report.md
