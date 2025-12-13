@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # ✅ Matrix-specific concurrency (CORRECT)
+    # ✅ Matrix-safe concurrency (prevents job cancellation)
     concurrency:
       group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
       cancel-in-progress: false
@@ -50,26 +50,26 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Checkout
+      # Checkout repository
       # ----------------------------------------------------------
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
       # ----------------------------------------------------------
-      # Python
+      # Setup Python
       # ----------------------------------------------------------
       - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # CML
+      # Setup CML
       # ----------------------------------------------------------
       - uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Dependencies
+      # Install dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
@@ -77,7 +77,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # GCP Auth
+      # Authenticate to GCP
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -88,7 +88,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # DVC Remote (local only)
+      # Setup DVC Remote (LOCAL config only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -97,13 +97,10 @@ jobs:
           dvc remote modify --local gcs_remote url $GCP_BUCKET
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
-
-      - name: Disable DVC analytics
-        run: |
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Git tag + DVC
+      # Checkout Git tag and pull DVC data
       # ----------------------------------------------------------
       - name: Checkout Git tag and pull DVC data
         run: |
@@ -121,25 +118,37 @@ jobs:
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Train
+      # Train model
       # ----------------------------------------------------------
       - name: Train model
         run: |
           python train.py
 
+      # ----------------------------------------------------------
+      # Verify model artifact
+      # ----------------------------------------------------------
       - name: Verify model artifact
         run: |
           test -f artifacts/model.joblib
 
       # ----------------------------------------------------------
-      # Tests (WRITE OUTPUT)
+      # Run tests (do NOT stop on failure yet)
       # ----------------------------------------------------------
       - name: Run tests
         run: |
-          pytest -vv > test_output.txt 2>&1
+          pytest -vv > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Report
+      # Show test output and fail if tests failed
+      # ----------------------------------------------------------
+      - name: Show test output and fail if needed
+        run: |
+          echo "=== 🧪 Pytest Output (${{ matrix.data_version }}) ==="
+          cat test_output.txt
+          grep -q "FAILED" test_output.txt && exit 1 || true
+
+      # ----------------------------------------------------------
+      # Create test report
       # ----------------------------------------------------------
       - name: Create test report
         run: |
@@ -149,12 +158,18 @@ jobs:
           cat test_output.txt >> $REPORT
           echo "\`\`\`" >> $REPORT
 
+      # ----------------------------------------------------------
+      # Upload report as artifact
+      # ----------------------------------------------------------
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: test-report-${{ matrix.data_version }}
           path: test_report_${{ matrix.data_version }}.md
 
+      # ----------------------------------------------------------
+      # Publish CML report (PR only)
+      # ----------------------------------------------------------
       - name: Publish CML report
         if: github.event_name == 'pull_request'
         env:
