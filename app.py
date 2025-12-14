@@ -123,11 +123,19 @@ def load_latest_mlflow_model():
         model_uri = f"models:/{MODEL_NAME}/latest"
         model = mlflow.sklearn.load_model(model_uri)
 
-        joblib.dump(model, LOCAL_MODEL_PATH)   # Save local cache
+        joblib.dump(model, LOCAL_MODEL_PATH)
         return model
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading model from MLflow Registry: {e}")
+        print(f"[WARN] MLflow unavailable: {e}")
+
+        if os.path.exists(LOCAL_MODEL_PATH):
+            return joblib.load(LOCAL_MODEL_PATH)
+
+        raise HTTPException(
+            status_code=503,
+            detail="Model unavailable (MLflow unreachable and no local cache)"
+        )
 
 # --------------------------------------------------------------
 # Utility: Central Model Loader (cached)
@@ -142,7 +150,6 @@ def load_model_cached():
         MODEL_CACHE = joblib.load(LOCAL_MODEL_PATH)
         return MODEL_CACHE
 
-    # Load from MLflow Registry
     MODEL_CACHE = load_latest_mlflow_model()
     return MODEL_CACHE
 
