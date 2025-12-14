@@ -33,6 +33,7 @@ permissions:
 jobs:
   test_model:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -40,7 +41,7 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout CURRENT branch (code)
+      # Step 1: Checkout CURRENT branch (code only)
       # ----------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,7 +72,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP (for DVC + MLflow artifacts)
+      # Step 5: Authenticate to GCP
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -83,7 +84,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 6: Setup DVC Remote (LOCAL only)
+      # Step 6: Setup DVC Remote (LOCAL only, no git changes)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -97,7 +98,7 @@ jobs:
 
       # ----------------------------------------------------------
       # Step 7: Checkout ONLY DVC pointers from tag
-      # (Avoids .dvc/config overwrite issue)
+      # (No branch switch, no config conflicts)
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
@@ -106,22 +107,22 @@ jobs:
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Step 8: Pull DVC data
+      # Step 8: Pull DVC data (FORCE to keep CI clean)
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
-          dvc pull -v
-          dvc checkout
+          dvc pull -v --force
+          dvc checkout --force
 
       # ----------------------------------------------------------
-      # Step 9: Verify data
+      # Step 9: Verify data exists
       # ----------------------------------------------------------
       - name: Verify data.csv exists
         run: |
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 10: Train model (logs to MLflow)
+      # Step 10: Train model (MLflow handles models)
       # ----------------------------------------------------------
       - name: Train model
         run: |
@@ -145,7 +146,7 @@ jobs:
           cat test_output.txt
 
       # ----------------------------------------------------------
-      # Step 13: Create and publish CML report
+      # Step 13: Publish CML report (ALL runs)
       # ----------------------------------------------------------
       - name: Publish CML report
         env:
