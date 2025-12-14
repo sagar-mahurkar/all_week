@@ -139,7 +139,7 @@ jobs:
       # ----------------------------------------------------------
       - name: Run tests
         run: |
-          pytest > test_output.txt 2>&1 || true
+          pytest -vv > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
       # Step 12: Show test output
