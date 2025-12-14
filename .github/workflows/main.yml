@@ -1,7 +1,9 @@
 # ==============================================================
 # GitHub Actions Workflow: Main
-# Trains model with versioned DVC data
-# Logs to MLflow (best-effort) and publishes CML report
+# - Trains model with versioned DVC data
+# - Runs tests
+# - Logs to MLflow (best-effort)
+# - Publishes CML report
 # ==============================================================
 
 name: Main
@@ -11,12 +13,14 @@ name: Main
 # --------------------------------------------------------------
 on:
   workflow_dispatch:
+
   push:
     branches: [main]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/main.yml"
+
   pull_request:
     branches: [main]
 
@@ -31,7 +35,7 @@ permissions:
 # Job Definition
 # --------------------------------------------------------------
 jobs:
-  train_model:
+  train_and_test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -41,7 +45,7 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout code
+      # Step 1: Checkout code (NO branch switching)
       # ----------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
@@ -58,10 +62,12 @@ jobs:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Setup CML
+      # Step 3: Setup CML (authenticated → avoids rate limits)
       # ----------------------------------------------------------
       - name: Setup CML
         uses: iterative/setup-cml@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------
       # Step 4: Install dependencies
@@ -72,7 +78,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP
+      # Step 5: Authenticate to GCP (DVC + MLflow artifacts)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -84,7 +90,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 6: Setup DVC Remote (LOCAL only)
+      # Step 6: Setup DVC Remote (LOCAL only, CI-safe)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -97,7 +103,7 @@ jobs:
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 7: Checkout ONLY DVC pointers
+      # Step 7: Checkout ONLY DVC pointers from tag
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
@@ -106,7 +112,7 @@ jobs:
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Step 8: Pull DVC data (force clean workspace)
+      # Step 8: Pull DVC data (FORCE – clean CI workspace)
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
@@ -114,14 +120,14 @@ jobs:
           dvc checkout --force
 
       # ----------------------------------------------------------
-      # Step 9: Verify data
+      # Step 9: Verify data exists
       # ----------------------------------------------------------
       - name: Verify data.csv
         run: |
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 10: Train model (MLflow best-effort)
+      # Step 10: Train model (MLflow = best-effort)
       # ----------------------------------------------------------
       - name: Train model
         env:
@@ -129,30 +135,47 @@ jobs:
         run: |
           echo "🚀 Training model with MLflow..."
           python train.py > train_output.txt 2>&1 || \
-          echo "⚠️ MLflow training failed (continuing CI)"
+          echo "⚠️ Training failed, continuing pipeline"
           python fetch_from_mlflow.py >> train_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Step 11: Show training logs
+      # Step 11: Run tests (do NOT fail early)
       # ----------------------------------------------------------
-      - name: Show training output
+      - name: Run tests
         run: |
-          echo "=== 🧠 Training Log (${{ matrix.data_version }}) ==="
-          cat train_output.txt
+          pytest -vv > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Step 12: Create report
+      # Step 12: Show logs
+      # ----------------------------------------------------------
+      - name: Show logs
+        run: |
+          echo "=== 🧠 Training Log ==="
+          cat train_output.txt || true
+          echo
+          echo "=== 🧪 Test Log ==="
+          cat test_output.txt || true
+
+      # ----------------------------------------------------------
+      # Step 13: Create combined report
       # ----------------------------------------------------------
       - name: Create report
         run: |
           REPORT="report_${{ matrix.data_version }}.md"
-          echo "## 📊 Training Results (${{ matrix.data_version }})" > $REPORT
+          echo "## 📊 Results for ${{ matrix.data_version }}" > $REPORT
+          echo "" >> $REPORT
+          echo "### 🧠 Training Output" >> $REPORT
           echo '```' >> $REPORT
           cat train_output.txt >> $REPORT
           echo '```' >> $REPORT
+          echo "" >> $REPORT
+          echo "### 🧪 Test Output" >> $REPORT
+          echo '```' >> $REPORT
+          cat test_output.txt >> $REPORT
+          echo '```' >> $REPORT
 
       # ----------------------------------------------------------
-      # Step 13: Publish CML report (always)
+      # Step 14: Publish CML report (ALL runs)
       # ----------------------------------------------------------
       - name: Publish CML report
         env:
