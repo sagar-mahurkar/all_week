@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iris-workload-deployment
+  namespace: default
+  labels:
+    app: iris-api
+spec:
+  replicas: 3  # Start with 1 replica for debugging
+  selector:
+    matchLabels:
+      app: iris-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app: iris-api
+    spec:
+      containers:
+        - name: iris-api
+          image: us-central1-docker.pkg.dev/lively-nimbus-473407-m9/my-repo/iris-api:latest
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          imagePullPolicy: Always
+      restartPolicy: Always
