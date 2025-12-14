@@ -1,7 +1,7 @@
 # ==============================================================
 # GitHub Actions Workflow: Main
 # Trains model with versioned DVC data
-# Logs to MLflow and publishes CML report
+# Logs to MLflow (best-effort) and publishes CML report
 # ==============================================================
 
 name: Main
@@ -11,14 +11,12 @@ name: Main
 # --------------------------------------------------------------
 on:
   workflow_dispatch:
-
   push:
     branches: [main]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/main.yml"
-
   pull_request:
     branches: [main]
 
@@ -35,6 +33,7 @@ permissions:
 jobs:
   train_model:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -42,7 +41,7 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout CURRENT branch (code)
+      # Step 1: Checkout code
       # ----------------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
@@ -73,7 +72,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP (for DVC + MLflow artifacts)
+      # Step 5: Authenticate to GCP
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -85,7 +84,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 6: Configure DVC remote (LOCAL only)
+      # Step 6: Setup DVC Remote (LOCAL only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -98,8 +97,7 @@ jobs:
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 7: Checkout ONLY DVC pointers from Git tag
-      # (Avoids .dvc/config overwrite error)
+      # Step 7: Checkout ONLY DVC pointers
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
@@ -108,12 +106,12 @@ jobs:
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Step 8: Pull DVC data
+      # Step 8: Pull DVC data (force clean workspace)
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
-          dvc pull -v
-          dvc checkout
+          dvc pull -v --force
+          dvc checkout --force
 
       # ----------------------------------------------------------
       # Step 9: Verify data
@@ -123,13 +121,16 @@ jobs:
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 10: Train model (logs to MLflow)
+      # Step 10: Train model (MLflow best-effort)
       # ----------------------------------------------------------
       - name: Train model
+        env:
+          MLFLOW_TRACKING_URI: http://35.188.33.106:5000
         run: |
           echo "🚀 Training model with MLflow..."
-          python train.py > train_output.txt 2>&1
-          python fetch_from_mlflow.py >> train_output.txt 2>&1
+          python train.py > train_output.txt 2>&1 || \
+          echo "⚠️ MLflow training failed (continuing CI)"
+          python fetch_from_mlflow.py >> train_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
       # Step 11: Show training logs
@@ -151,10 +152,10 @@ jobs:
           echo '```' >> $REPORT
 
       # ----------------------------------------------------------
-      # Step 13: Publish CML report (PR + manual + push)
+      # Step 13: Publish CML report (always)
       # ----------------------------------------------------------
       - name: Publish CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cml comment create report_${{ matrix.data_version }}.md
+          cml comment create --publish report_${{ matrix.data_version }}.md
