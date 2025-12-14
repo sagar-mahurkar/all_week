@@ -1,17 +1,35 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
+# Runs tests on versioned DVC data
+# Logs results via MLflow and publishes CML report
 # ==============================================================
+
 name: Test
 
+# --------------------------------------------------------------
+# Trigger Conditions
+# --------------------------------------------------------------
 on:
   workflow_dispatch:
   push:
+    branches: ["**"]
+    paths:
+      - "**.py"
+      - "requirements.txt"
+      - ".github/workflows/test.yml"
   pull_request:
+    branches: ["**"]
 
+# --------------------------------------------------------------
+# Permissions
+# --------------------------------------------------------------
 permissions:
   contents: write
   pull-requests: write
 
+# --------------------------------------------------------------
+# Job Definition
+# --------------------------------------------------------------
 jobs:
   test_model:
     runs-on: ubuntu-latest
@@ -22,86 +40,120 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Checkout CURRENT branch (code stays fixed)
+      # Step 1: Checkout CURRENT branch (code)
       # ----------------------------------------------------------
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------
-      # Python
+      # Step 2: Setup Python
       # ----------------------------------------------------------
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # CML
+      # Step 3: Setup CML
       # ----------------------------------------------------------
-      - uses: iterative/setup-cml@v2
+      - name: Setup CML
+        uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Dependencies
+      # Step 4: Install dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Authenticate to GCP
+      # Step 5: Authenticate to GCP (for DVC + MLflow artifacts)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
           GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
         run: |
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
+          gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Setup DVC (LOCAL only – no git changes)
+      # Step 6: Setup DVC Remote (LOCAL only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
+        env:
+          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
         run: |
-          dvc remote add --local -f gcs_remote gs://mlops-lively-nimbus-473407-m9
+          dvc remote modify --local gcs_remote url $GCP_BUCKET || \
+          dvc remote add --local -d gcs_remote $GCP_BUCKET
           dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
           dvc remote default --local gcs_remote
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Checkout ONLY DVC pointers from tag
+      # Step 7: Checkout ONLY DVC pointers from tag
+      # (Avoids .dvc/config overwrite issue)
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
+          echo "📦 Using data version: ${{ matrix.data_version }}"
           git fetch --tags
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Pull DVC data
+      # Step 8: Pull DVC data
       # ----------------------------------------------------------
       - name: Pull DVC data
-        run: dvc pull
+        run: |
+          dvc pull -v
+          dvc checkout
 
       # ----------------------------------------------------------
-      # Train model
+      # Step 9: Verify data
+      # ----------------------------------------------------------
+      - name: Verify data.csv exists
+        run: |
+          test -f data.csv
+
+      # ----------------------------------------------------------
+      # Step 10: Train model (logs to MLflow)
       # ----------------------------------------------------------
       - name: Train model
-        run: python train.py
+        run: |
+          echo "🚀 Training model with MLflow..."
+          python train.py > train_output.txt 2>&1
+          python fetch_from_mlflow.py >> train_output.txt 2>&1
 
       # ----------------------------------------------------------
-      # Run tests
+      # Step 11: Run tests (do not fail early)
       # ----------------------------------------------------------
       - name: Run tests
-        run: pytest > test_output.txt 2>&1 || true
+        run: |
+          pytest > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Publish CML report
+      # Step 12: Show test output
+      # ----------------------------------------------------------
+      - name: Show test output
+        run: |
+          echo "=== 🧪 Test Log (${{ matrix.data_version }}) ==="
+          cat test_output.txt
+
+      # ----------------------------------------------------------
+      # Step 13: Create and publish CML report
       # ----------------------------------------------------------
       - name: Publish CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## 🧪 Test Results (${{ matrix.data_version }})" > report.md
-          echo '```' >> report.md
-          cat test_output.txt >> report.md
-          echo '```' >> report.md
-          cml comment create --publish report.md
+          REPORT="report_${{ matrix.data_version }}.md"
+          echo "## 🧪 Test Results (${{ matrix.data_version }})" > $REPORT
+          echo '```' >> $REPORT
+          cat test_output.txt >> $REPORT
+          echo '```' >> $REPORT
+          cml comment create --publish $REPORT

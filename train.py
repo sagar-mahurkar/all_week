@@ -1,55 +1,120 @@
-# import important modules
+# train.py
 import os
-import sys
+import mlflow
 import joblib
-import numpy as np
 import pandas as pd
-from sklearn import metrics
-from zoneinfo import ZoneInfo
-from datetime import datetime
-from pandas.plotting import parallel_coordinates
-from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier, plot_tree
-from pathlib import Path
 
-# load the data
-data = pd.read_csv('data.csv')
+from mlflow.tracking import MlflowClient
+from mlflow.models.signature import infer_signature
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
 
-# split the data into training and test data
-train, test = train_test_split(
-    data,
-    test_size=0.4,
-    stratify=data['species'],
-    random_state=42
-)
+# -------------------------- Configuration --------------------------
+MLFLOW_TRACKING_URI = "http://35.188.33.106:5000"
+EXPERIMENT_NAME = "iris-experiment"
+MODEL_NAME = "iris-random-forest"
+RUN_NAME = "Random Forest Hyperparameter Search"
 
-X_train = train[['sepal_length','sepal_width','petal_length','petal_width']]
-y_train = train.species
-X_test = test[['sepal_length','sepal_width','petal_length','petal_width']]
-y_test = test.species
+LOCAL_MODEL_DIR = "artifacts"
+LOCAL_MODEL_PATH = os.path.join(LOCAL_MODEL_DIR, "random_forest_model.pkl")
+os.makedirs(LOCAL_MODEL_DIR, exist_ok=True)
 
-# split the train data into training and validation
-X_train, X_eval, y_train, y_eval = train_test_split(
-    X_train,
-    y_train,
-    test_size=0.2,
-    stratify=y_train,
-    random_state=42
-)
+# -------------------------- Data Preparation --------------------------
+def prepare_data():
+    """Load and split the Iris dataset."""
+    data = pd.read_csv("data.csv")
+    data = data[
+        ["sepal_length", "sepal_width", "petal_length", "petal_width", "species"]
+    ]
 
-# train the model
-model = DecisionTreeClassifier(max_depth=3, random_state=1)
-model.fit(X_train, y_train)
+    train, test = train_test_split(
+        data,
+        test_size=0.2,
+        stratify=data["species"],
+        random_state=42,
+    )
 
-# ensure artifacts directory exists
-Path("artifacts").mkdir(parents=True, exist_ok=True)
+    X_train = train.drop(columns=["species"])
+    y_train = train["species"]
+    X_test = test.drop(columns=["species"])
+    y_test = test["species"]
 
-# dump the model
-joblib.dump(model, "artifacts/model.joblib")
+    return X_train, y_train, X_test, y_test
 
-# predict using the model
-prediction = model.predict(X_eval)
-print('Test set accuracy:', "{:.3f}".format(metrics.accuracy_score(prediction, y_eval)))
+# -------------------------- Training & Logging --------------------------
+def train_and_log_model(X_train, y_train, X_test, y_test):
+    """Train, tune, and log a RandomForest model to MLflow."""
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(EXPERIMENT_NAME)
 
-prediction = model.predict(X_test)
-print('Eval set accuracy:', "{:.3f}".format(metrics.accuracy_score(prediction, y_test)))
+    # param_grid = {
+    #     "n_estimators": [50, 100],
+    #     "criterion": ["gini", "entropy"],
+    #     "max_depth": [None, 5, 10],
+    #     "min_samples_split": [2, 5],
+    # }
+
+    param_grid = {
+      "n_estimators": [200, 300],
+      "max_depth": [None, 8, 12],
+      "min_samples_split": [2, 4],
+      "min_samples_leaf": [1, 2],
+      "max_features": ["sqrt", "log2"],
+      "bootstrap": [True],
+    }
+
+    with mlflow.start_run(run_name=RUN_NAME):
+        base_model = RandomForestClassifier(random_state=42)
+
+        grid = GridSearchCV(
+          base_model,
+          param_grid,
+          cv=5,
+          scoring="accuracy",
+          n_jobs=-1,
+          verbose=1,
+    )
+    grid.fit(X_train, y_train)
+
+    best_model = grid.best_estimator_
+
+    # ---------------- Metrics & Params ----------------
+    mlflow.log_params(grid.best_params_)
+    mlflow.log_metric("cv_accuracy", grid.best_score_)
+    mlflow.log_metric("test_accuracy", best_model.score(X_test, y_test))
+
+    # ---------------- Model Signature ----------------
+    input_example = X_train.iloc[:5]
+    signature = infer_signature(X_train, best_model.predict(X_train))
+
+    # ---------------- Log Model ----------------
+    mlflow.sklearn.log_model(
+      sk_model=best_model,
+      name="model",
+      input_example=input_example,
+      signature=signature,
+      registered_model_name=MODEL_NAME,
+    )
+
+    # ---------------- Save Locally ----------------
+    joblib.dump(best_model, LOCAL_MODEL_PATH)
+
+    print("✅ Model logged and registered successfully")
+
+    return {
+      "best_params": grid.best_params_,
+      "cv_accuracy": grid.best_score_,
+      "test_accuracy": best_model.score(X_test, y_test),
+      "local_model_path": LOCAL_MODEL_PATH,
+    }
+
+# -------------------------- Main Entry --------------------------
+def main():
+    print("\n🚀 Starting Model Training...")
+    X_train, y_train, X_test, y_test = prepare_data()
+    results = train_and_log_model(X_train, y_train, X_test, y_test)
+    print("\n✅ Training Complete!")
+    print(results)
+
+if __name__ == "__main__":
+    main()

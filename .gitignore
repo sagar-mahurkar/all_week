@@ -1,2 +1,4 @@
 /data.csv
 /.ipynb_checkpoints/
+/downloaded_models/
+/cv_results.csv
