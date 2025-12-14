@@ -11,12 +11,14 @@ name: Test
 # --------------------------------------------------------------
 on:
   workflow_dispatch:
+
   push:
     branches: ["**"]
     paths:
       - "**.py"
       - "requirements.txt"
       - ".github/workflows/test.yml"
+
   pull_request:
     branches: ["**"]
 
@@ -58,10 +60,12 @@ jobs:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Setup CML
+      # Step 3: Setup CML (AUTHENTICATED – fixes rate limit)
       # ----------------------------------------------------------
       - name: Setup CML
         uses: iterative/setup-cml@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------
       # Step 4: Install dependencies
@@ -72,7 +76,7 @@ jobs:
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to GCP
+      # Step 5: Authenticate to GCP (DVC + MLflow)
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -84,7 +88,7 @@ jobs:
           gcloud config set project lively-nimbus-473407-m9
 
       # ----------------------------------------------------------
-      # Step 6: Setup DVC Remote (LOCAL only, no git changes)
+      # Step 6: Configure DVC Remote (LOCAL only)
       # ----------------------------------------------------------
       - name: Setup DVC Remote
         env:
@@ -97,8 +101,8 @@ jobs:
           dvc config --local core.analytics false
 
       # ----------------------------------------------------------
-      # Step 7: Checkout ONLY DVC pointers from tag
-      # (No branch switch, no config conflicts)
+      # Step 7: Checkout ONLY DVC pointers from Git tag
+      # (Avoids .dvc/config overwrite)
       # ----------------------------------------------------------
       - name: Checkout DVC pointers
         run: |
@@ -107,7 +111,7 @@ jobs:
           git checkout ${{ matrix.data_version }} -- '*.dvc'
 
       # ----------------------------------------------------------
-      # Step 8: Pull DVC data (FORCE to keep CI clean)
+      # Step 8: Pull DVC data (FORCE – CI safe)
       # ----------------------------------------------------------
       - name: Pull DVC data
         run: |
@@ -115,14 +119,14 @@ jobs:
           dvc checkout --force
 
       # ----------------------------------------------------------
-      # Step 9: Verify data exists
+      # Step 9: Verify data
       # ----------------------------------------------------------
       - name: Verify data.csv exists
         run: |
           test -f data.csv
 
       # ----------------------------------------------------------
-      # Step 10: Train model (MLflow handles models)
+      # Step 10: Train model (logs to MLflow)
       # ----------------------------------------------------------
       - name: Train model
         run: |
