@@ -1,16 +1,12 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
-# Runs tests and publishes CML report
 # ==============================================================
-
 name: Test
 
 on:
   workflow_dispatch:
   push:
-    branches: ["**"]
   pull_request:
-    branches: ["**"]
 
 permissions:
   contents: write
@@ -26,40 +22,30 @@ jobs:
 
     steps:
       # ----------------------------------------------------------
-      # Checkout repository
+      # Checkout CURRENT branch (code stays fixed)
       # ----------------------------------------------------------
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------
-      # Setup Python
+      # Python
       # ----------------------------------------------------------
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Setup CML
+      # CML
       # ----------------------------------------------------------
       - uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Install dependencies
+      # Dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      # ----------------------------------------------------------
-      # Setup DVC remote
-      # ----------------------------------------------------------
-      - name: Setup DVC Remote
-        env:
-          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
-        run: |
-          dvc remote add -f -d gcs_remote $GCP_BUCKET
+        run: pip install -r requirements.txt
 
       # ----------------------------------------------------------
       # Authenticate to GCP
@@ -70,23 +56,42 @@ jobs:
         run: |
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
-          dvc remote modify gcs_remote credentialpath /tmp/gcp_key.json
 
       # ----------------------------------------------------------
-      # Checkout data version
+      # Setup DVC (LOCAL only – no git changes)
       # ----------------------------------------------------------
-      - name: Checkout and pull DVC data
+      - name: Setup DVC Remote
+        run: |
+          dvc remote add --local -f gcs_remote gs://mlops-lively-nimbus-473407-m9
+          dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote default --local gcs_remote
+          dvc config --local core.analytics false
+
+      # ----------------------------------------------------------
+      # Checkout ONLY DVC pointers from tag
+      # ----------------------------------------------------------
+      - name: Checkout DVC pointers
         run: |
           git fetch --tags
-          git checkout ${{ matrix.data_version }}
-          dvc pull
+          git checkout ${{ matrix.data_version }} -- '*.dvc'
+
+      # ----------------------------------------------------------
+      # Pull DVC data
+      # ----------------------------------------------------------
+      - name: Pull DVC data
+        run: dvc pull
+
+      # ----------------------------------------------------------
+      # Train model
+      # ----------------------------------------------------------
+      - name: Train model
+        run: python train.py
 
       # ----------------------------------------------------------
       # Run tests
       # ----------------------------------------------------------
       - name: Run tests
-        run: |
-          pytest > test_output.txt 2>&1 || true
+        run: pytest > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
       # Publish CML report
