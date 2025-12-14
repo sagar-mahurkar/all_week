@@ -1,13 +1,7 @@
 # ==============================================================
 # GitHub Actions Workflow: Main
-# Trains model and publishes CML report
 # ==============================================================
-
 name: Main
-
-concurrency:
-  group: main-only-${{ github.ref }}
-  cancel-in-progress: false
 
 on:
   workflow_dispatch:
@@ -29,37 +23,20 @@ jobs:
         data_version: [v1.0, v2.0]
 
     steps:
-      # ----------------------------------------------------------
-      # Checkout repository
-      # ----------------------------------------------------------
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ----------------------------------------------------------
-      # Setup Python
-      # ----------------------------------------------------------
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.9"
 
-      # ----------------------------------------------------------
-      # Setup CML
-      # ----------------------------------------------------------
       - uses: iterative/setup-cml@v2
 
-      # ----------------------------------------------------------
-      # Install dependencies
-      # ----------------------------------------------------------
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      # ----------------------------------------------------------
-      # Authenticate to GCP
-      # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
           GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
@@ -67,35 +44,23 @@ jobs:
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
 
-      # ----------------------------------------------------------
-      # Configure DVC remote
-      # ----------------------------------------------------------
       - name: Setup DVC Remote
-        env:
-          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
         run: |
-          dvc remote add -f -d gcs_remote $GCP_BUCKET
-          dvc remote modify gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote add --local -f gcs_remote gs://mlops-lively-nimbus-473407-m9
+          dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
+          dvc remote default --local gcs_remote
 
-      # ----------------------------------------------------------
-      # Checkout data version
-      # ----------------------------------------------------------
-      - name: Checkout and pull DVC data
+      - name: Checkout DVC pointers
         run: |
           git fetch --tags
-          git checkout ${{ matrix.data_version }}
-          dvc pull
+          git checkout ${{ matrix.data_version }} -- '*.dvc'
 
-      # ----------------------------------------------------------
-      # Train model
-      # ----------------------------------------------------------
+      - name: Pull DVC data
+        run: dvc pull
+
       - name: Train model
-        run: |
-          python train.py > train_output.txt 2>&1
+        run: python train.py > train_output.txt 2>&1
 
-      # ----------------------------------------------------------
-      # Publish CML report
-      # ----------------------------------------------------------
       - name: Publish CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
