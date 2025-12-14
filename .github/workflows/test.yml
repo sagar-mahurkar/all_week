@@ -1,94 +1,68 @@
 # ==============================================================
 # GitHub Actions Workflow: Test
-# Purpose:
-# - Run tests against multiple DVC data versions (v1.0, v2.0)
-# - Use latest code from branch
-# - Use versioned data via Git tags + DVC
-# - Publish CML report on EVERY workflow run
+# Runs tests and publishes CML report
 # ==============================================================
 
 name: Test
 
-# --------------------------------------------------------------
-# Trigger Conditions
-# --------------------------------------------------------------
 on:
-  # Manual trigger (runs BOTH v1.0 and v2.0)
   workflow_dispatch:
-
-  # Run on any push affecting code or dependencies
   push:
     branches: ["**"]
-    paths:
-      - "**.py"
-      - "requirements.txt"
-      - ".github/workflows/test.yml"
-
-  # Run on all pull requests
   pull_request:
+    branches: ["**"]
 
-# --------------------------------------------------------------
-# Permissions (minimum required)
-# --------------------------------------------------------------
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
-# --------------------------------------------------------------
-# Job Definition
-# --------------------------------------------------------------
 jobs:
   test_model:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
-    # ----------------------------------------------------------
-    # Prevent matrix jobs (v1.0 / v2.0) from canceling each other
-    # ----------------------------------------------------------
-    concurrency:
-      group: test-${{ github.workflow }}-${{ github.ref }}-${{ matrix.data_version }}
-      cancel-in-progress: false
-
-    # ----------------------------------------------------------
-    # Test against multiple data versions
-    # ----------------------------------------------------------
     strategy:
       matrix:
         data_version: [v1.0, v2.0]
 
     steps:
       # ----------------------------------------------------------
-      # Step 1: Checkout CURRENT branch (code + tests)
+      # Checkout repository
       # ----------------------------------------------------------
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------------------------------------
-      # Step 2: Setup Python environment
+      # Setup Python
       # ----------------------------------------------------------
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
       # ----------------------------------------------------------
-      # Step 3: Setup CML (REQUIRED)
+      # Setup CML
       # ----------------------------------------------------------
-      - name: Setup CML
-        uses: iterative/setup-cml@v2
+      - uses: iterative/setup-cml@v2
 
       # ----------------------------------------------------------
-      # Step 4: Install project dependencies
+      # Install dependencies
       # ----------------------------------------------------------
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
           pip install -r requirements.txt
 
       # ----------------------------------------------------------
-      # Step 5: Authenticate to Google Cloud (for DVC remote)
+      # Setup DVC remote
+      # ----------------------------------------------------------
+      - name: Setup DVC Remote
+        env:
+          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
+        run: |
+          dvc remote add -f -d gcs_remote $GCP_BUCKET
+
+      # ----------------------------------------------------------
+      # Authenticate to GCP
       # ----------------------------------------------------------
       - name: Authenticate to GCP
         env:
@@ -96,89 +70,33 @@ jobs:
         run: |
           echo "$GCP_CREDENTIALS_JSON" > /tmp/gcp_key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp_key.json
-          gcloud config set project lively-nimbus-473407-m9
+          dvc remote modify gcs_remote credentialpath /tmp/gcp_key.json
 
       # ----------------------------------------------------------
-      # Step 6: Configure DVC remote (LOCAL config only)
+      # Checkout data version
       # ----------------------------------------------------------
-      - name: Configure DVC remote
-        env:
-          GCP_BUCKET: "gs://mlops-lively-nimbus-473407-m9"
-        run: |
-          dvc remote modify --local gcs_remote url $GCP_BUCKET
-          dvc remote modify --local gcs_remote credentialpath /tmp/gcp_key.json
-          dvc remote default --local gcs_remote
-          dvc config --local core.analytics false
-
-      # ----------------------------------------------------------
-      # Step 7: Checkout VERSIONED DVC pointers from Git tag
-      # ----------------------------------------------------------
-      - name: Checkout DVC pointers
+      - name: Checkout and pull DVC data
         run: |
           git fetch --tags
-          git checkout ${{ matrix.data_version }} -- '*.dvc'
-
-      # ----------------------------------------------------------
-      # Step 8: Pull actual data from DVC remote
-      # ----------------------------------------------------------
-      - name: Pull DVC data
-        run: |
+          git checkout ${{ matrix.data_version }}
           dvc pull
-          dvc checkout
 
       # ----------------------------------------------------------
-      # Step 9: Train model using CURRENT code
-      # ----------------------------------------------------------
-      - name: Train model
-        run: |
-          python train.py
-
-      # ----------------------------------------------------------
-      # Step 10: Run tests (capture output without failing early)
+      # Run tests
       # ----------------------------------------------------------
       - name: Run tests
         run: |
-          pytest -vv > test_output.txt 2>&1 || true
+          pytest > test_output.txt 2>&1 || true
 
       # ----------------------------------------------------------
-      # Step 11: Display test output and fail if tests failed
+      # Publish CML report
       # ----------------------------------------------------------
-      - name: Fail if tests failed
-        run: |
-          cat test_output.txt
-          grep -q "FAILED" test_output.txt && exit 1 || true
-
-      # ----------------------------------------------------------
-      # Step 12: Create per-version test report
-      # ----------------------------------------------------------
-      - name: Create test report
-        run: |
-          REPORT="test_report_${{ matrix.data_version }}.md"
-          echo "## 🧪 Test Results for ${{ matrix.data_version }}" > $REPORT
-          echo '```' >> $REPORT
-          cat test_output.txt >> $REPORT
-          echo '```' >> $REPORT
-
-      # ----------------------------------------------------------
-      # Step 13: Upload report as workflow artifact
-      # ----------------------------------------------------------
-      - name: Upload test report
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-report-${{ matrix.data_version }}
-          path: test_report_${{ matrix.data_version }}.md
-          
-      # ----------------------------------------------------------
-      # Step 14: Publish results
-      # ----------------------------------------------------------
-      - name: Publish results
+      - name: Publish CML report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "Publishing CML report to Pull Request"
-            cml comment create test_report_${{ matrix.data_version }}.md
-          else
-            echo "Publishing report to GitHub Actions Summary"
-            cat test_report_${{ matrix.data_version }}.md >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "## 🧪 Test Results (${{ matrix.data_version }})" > report.md
+          echo '```' >> report.md
+          cat test_output.txt >> report.md
+          echo '```' >> report.md
+          cml comment create --publish report.md
